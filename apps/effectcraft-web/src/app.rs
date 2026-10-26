@@ -101,7 +101,7 @@ impl eframe::App for WebApp {
             files::read_files(dropped, |paths| post(move |app| open_or_import(app, paths)));
         }
         self.app.logic(ctx, frame);
-        host::dirty(self.app.session.is_dirty());
+        host::dirty(ctx, self.app.session.is_dirty());
         api::poll_replies();
         // Render Queue outputs written this frame (here or by a worker) → downloads.
         files::flush_downloads();
@@ -186,10 +186,18 @@ fn install_hooks(app: &mut EffectcraftApp) {
 pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     let doc = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
-    let canvas: web_sys::HtmlCanvasElement = doc.get_element_by_id(&canvas_id).ok_or("no canvas")?.dyn_into()?;
-    // `?host=parent`: framed by a same-origin page that opens and saves the files ([`host`]); it
-    // starts on a blank project and keeps no session of its own.
-    let hosted = query_value("host").as_deref() == Some("parent") && host::connect();
+    // `?host=parent`: framed by a same-origin page (or the `?host_origin=` one) that opens and
+    // saves the files ([`host`]); it starts on a blank project and keeps no session of its own.
+    // Connected before the canvas is looked up, so the parent hears that failure too.
+    let hosted = query_value("host").as_deref() == Some("parent") && host::connect(query_value("host_origin").as_deref());
+    let canvas = match doc.get_element_by_id(&canvas_id).map(|c| c.dyn_into::<web_sys::HtmlCanvasElement>()) {
+        Some(Ok(canvas)) => canvas,
+        _ => {
+            let error = format!("no <canvas id=\"{canvas_id}\">");
+            host::failed(&error);
+            return Err(error.into());
+        }
+    };
     let empty = hosted || query_flag("empty");
     let home = !hosted && query_flag("home");
     // Browser storage: settings, recent projects, imported media, saved projects, auto-saves and
